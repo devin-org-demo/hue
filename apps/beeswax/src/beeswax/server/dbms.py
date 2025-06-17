@@ -102,9 +102,25 @@ def get_zk_hs2():
   znode = HIVE_DISCOVERY_HIVESERVER2_ZNODE.get()
   if zk.exists(znode):
     LOG.debug("Selecting up Hive server via the following node {0}".format(znode))
-    hiveservers = zk.get_children(znode)
-    if hiveservers and 'sequence' in hiveservers[0]:
-      hiveservers.sort(key=lambda x: re.findall(r'sequence=\d+', x)[0])
+    raw_servers = zk.get_children(znode)
+    
+    valid_servers = []
+    for server in raw_servers:
+      sequence_match = re.findall(r'sequence=\d+', server)
+      if sequence_match:
+        valid_servers.append(server)
+    
+    if valid_servers:
+      def extract_sequence(server):
+        match = re.findall(r'sequence=(\d+)', server)
+        return int(match[0]) if match else 0
+      
+      valid_servers.sort(key=extract_sequence)
+      hiveservers = valid_servers
+    else:
+      LOG.warning("No valid HiveServer2 nodes with sequence numbers found in ZooKeeper")
+      hiveservers = []
+  
   zk.stop()
   return hiveservers
 

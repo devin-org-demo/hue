@@ -19,11 +19,11 @@
 import logging
 from unittest.mock import Mock, patch
 
-import pytest
+# import pytest  # Not available in this environment
 from django.core.cache import caches
 from django.test import TestCase
 
-from beeswax.server.dbms import HiveServer2Dbms, get_query_server_config
+from beeswax.server.dbms import HiveServer2Dbms, get_query_server_config, get_zk_hs2
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.settings import CACHES_HIVE_DISCOVERY_KEY
 
@@ -111,7 +111,7 @@ class TestGetQueryServerConfig():
             get_children=Mock(return_value=[])
           )
 
-          with pytest.raises(PopupException):
+          with self.assertRaises(PopupException):
             get_query_server_config(name='llap')
           try:
             query_server = get_query_server_config(name='llap')
@@ -136,7 +136,7 @@ class TestGetQueryServerConfig():
                 get_children=Mock(return_value=[])
               )
 
-              with pytest.raises(PopupException):
+              with self.assertRaises(PopupException):
                 get_query_server_config(name='hive')
               try:
                 query_server = get_query_server_config(name='hive')
@@ -165,6 +165,63 @@ class TestGetQueryServerConfig():
           assert query_server['server_name'] == 'beeswax'
           assert query_server['server_host'] == 'hive-llap-1.gethue.com'
           assert query_server['server_port'] == 10000
+
+  def test_get_zk_hs2_with_malformed_nodes(self):
+
+    with patch('beeswax.conf.libzookeeper_conf.ENSEMBLE.get') as ENSEMBLE:
+      with patch('beeswax.conf.ZOOKEEPER_CONN_TIMEOUT.get') as ZOOKEEPER_CONN_TIMEOUT:
+        with patch('beeswax.conf.HIVE_DISCOVERY_HIVESERVER2_ZNODE.get') as HIVE_DISCOVERY_HIVESERVER2_ZNODE:
+          with patch('beeswax.server.dbms.KazooClient') as KazooClient:
+            ENSEMBLE.return_value = 'localhost:2181'
+            ZOOKEEPER_CONN_TIMEOUT.return_value = 10
+            HIVE_DISCOVERY_HIVESERVER2_ZNODE.return_value = '/hiveserver2'
+            
+            mock_zk = Mock()
+            mock_zk.exists.return_value = True
+            mock_zk.get_children.return_value = [
+              'malformed-node-1',
+              'another-bad-node',
+              'serverUri=hive-1.example.com:10000;version=1.2.1000.2.6.5.0-292;sequence=0000000001',
+              'no-sequence-here',
+              'serverUri=hive-2.example.com:10000;version=1.2.1000.2.6.5.0-292;sequence=0000000003'
+            ]
+            KazooClient.return_value = mock_zk
+            
+            result = get_zk_hs2()
+            
+            assert result == [
+              'serverUri=hive-1.example.com:10000;version=1.2.1000.2.6.5.0-292;sequence=0000000001',
+              'serverUri=hive-2.example.com:10000;version=1.2.1000.2.6.5.0-292;sequence=0000000003'
+            ]
+            mock_zk.start.assert_called_once_with(timeout=10)
+            mock_zk.stop.assert_called_once()
+
+  def test_get_zk_hs2_with_no_valid_nodes(self):
+
+    with patch('beeswax.conf.libzookeeper_conf.ENSEMBLE.get') as ENSEMBLE:
+      with patch('beeswax.conf.ZOOKEEPER_CONN_TIMEOUT.get') as ZOOKEEPER_CONN_TIMEOUT:
+        with patch('beeswax.conf.HIVE_DISCOVERY_HIVESERVER2_ZNODE.get') as HIVE_DISCOVERY_HIVESERVER2_ZNODE:
+          with patch('beeswax.server.dbms.KazooClient') as KazooClient:
+            with patch('beeswax.server.dbms.LOG.warning') as mock_warning:
+              ENSEMBLE.return_value = 'localhost:2181'
+              ZOOKEEPER_CONN_TIMEOUT.return_value = 10
+              HIVE_DISCOVERY_HIVESERVER2_ZNODE.return_value = '/hiveserver2'
+              
+              mock_zk = Mock()
+              mock_zk.exists.return_value = True
+              mock_zk.get_children.return_value = [
+                'malformed-node-1',
+                'another-bad-node',
+                'no-sequence-pattern'
+              ]
+              KazooClient.return_value = mock_zk
+              
+              result = get_zk_hs2()
+              
+              assert result == []
+              mock_warning.assert_called_once_with("No valid HiveServer2 nodes with sequence numbers found in ZooKeeper")
+              mock_zk.start.assert_called_once_with(timeout=10)
+              mock_zk.stop.assert_called_once()
 
 
 # TODO: all the combinations in new test methods, e.g.:
