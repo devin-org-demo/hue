@@ -103,8 +103,13 @@ def get_zk_hs2():
   if zk.exists(znode):
     LOG.debug("Selecting up Hive server via the following node {0}".format(znode))
     hiveservers = zk.get_children(znode)
-    if hiveservers and 'sequence' in hiveservers[0]:
-      hiveservers.sort(key=lambda x: re.findall(r'sequence=\d+', x)[0])
+    if hiveservers:
+      sequence_nodes = [x for x in hiveservers if re.search(r'sequence=\d+', x)]
+      if sequence_nodes:
+        sequence_nodes.sort(key=lambda x: int(re.findall(r'sequence=(\d+)', x)[0]))
+        hiveservers = sequence_nodes
+      else:
+        LOG.warning("No nodes matching 'sequence=\d+' found under {0}".format(znode))
   zk.stop()
   return hiveservers
 
